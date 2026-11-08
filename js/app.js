@@ -809,6 +809,8 @@
   var animals = [];
   var selected = null;
   var followed = null;
+  var followedRadius = 0;
+  var lastAnimalTap = null;
 
   var ICONS = {
     turn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3.5V9h-5.5"/></svg>',
@@ -1727,7 +1729,6 @@
     if (selected === a) return;
     if (selected) selected.locked = false;
     selected = a;
-    followed = a ? a.group : null;
     if (selected) {
       bar.innerHTML = barHTML(selected.kind);
       if (P.audio) P.audio.voice(selected.kind, 0.85, true);
@@ -1736,10 +1737,10 @@
     updateBarActive();
   }
 
-  function deselect() {
+  function deselect(keepView) {
     if (selected) selected.locked = false;
     selected = null;
-    followed = null;
+    if (keepView !== true) { followed = null; lastAnimalTap = null; }
     selEl.hidden = true;
   }
 
@@ -1997,22 +1998,39 @@
     hintFlash._t = setTimeout(function () { h.innerHTML = h.dataset.orig; }, 3200);
   }
 
+  function toggleFollowOnDoubleTap(event, group, radius) {
+    var now = performance.now();
+    var previous = lastAnimalTap;
+    if (previous && previous.group === group && previous.type === event.pointerType &&
+        now - previous.time <= 420 && Math.hypot(event.clientX - previous.x, event.clientY - previous.y) <= 28) {
+      followed = followed === group ? null : group;
+      followedRadius = radius;
+      lastAnimalTap = null;
+      return true;
+    }
+    lastAnimalTap = { group: group, type: event.pointerType, time: now, x: event.clientX, y: event.clientY };
+    return false;
+  }
+
   function onDown(e) {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (bar.contains(e.target)) return;
+    if (P.audio) P.audio.init();
 
     var a = pickAnimal(e.clientX, e.clientY);
     if (a) {
+      var toggled = toggleFollowOnDoubleTap(e, a.group, a.radius);
+      if (!toggled && selected === a && P.audio) P.audio.voice(a.kind, 0.85, true);
       select(a);
-      if (a.talk) say(a, a.talk);
+      if (!toggled && a.talk) say(a, a.talk);
       e.preventDefault();
       return;
     }
 
     var life = pickPondLife(e.clientX, e.clientY);
     if (life) {
-      deselect();
-      followed = life.g;
+      deselect(true);
+      if (toggleFollowOnDoubleTap(e, life.g, 0)) { e.preventDefault(); return; }
       if (P.audio) P.audio.voice(life.kind, 0.8, true);
       if (life.kind === 'swan') {
         life.flap = 1;
@@ -2033,6 +2051,8 @@
       e.preventDefault();
       return;
     }
+
+    lastAnimalTap = null;
 
     // water: ripple + fish scatter, and still allow lassoing a new pond creature
     var g = screenToGround(e.clientX, e.clientY);
@@ -2498,9 +2518,9 @@
     }
 
     focus.copy(followed ? followed.position : CAM.target);
-    if (followed) focus.y += selected ? selected.radius * 0.8 : 0.32;
+    if (followed) focus.y += followedRadius ? followedRadius * 0.8 : 0.32;
     look.lerp(focus, 1 - Math.exp(-5.2 * dt));
-    var distance = followed ? (selected ? Math.max(7.5, selected.radius * 6) : 8.5) * zoom : CAM.dist * zoom;
+    var distance = followed ? (followedRadius ? Math.max(7.5, followedRadius * 6) : 8.5) * zoom : CAM.dist * zoom;
     if (followed && camera.aspect < 1) distance /= Math.max(0.62, camera.aspect);
     if (cameraDistance === null) cameraDistance = CAM.dist;
     cameraDistance += (distance - cameraDistance) * (1 - Math.exp(-3.5 * dt));

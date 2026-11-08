@@ -1,7 +1,7 @@
 /* ============================================================
    Little Pasture — sound
-   Everything is synthesised at runtime with the Web Audio API,
-   so the page still needs no external assets.
+   Local field recordings provide the animal calls; Web Audio
+   synthesises ambience, footsteps and water effects.
 
    Two buses: the ambience bed (wind, pad, birds, chimes) and the
    creature voices, so one never fights the other for level.
@@ -22,6 +22,62 @@
   var muted = false;
   var ready = false;
   var lastVoice = -10;
+  var lastCall = Object.create(null);
+  var recordings = Object.create(null);
+  var pendingRecordings = Object.create(null);
+  var clips = { sheep: 1.4, cow: 2.5, horse: 1.2, pig: 0.8, boar: 1.7, duck: 0.9, swan: 1.8 };
+  var clipBytes = {};
+  Object.keys(clips).forEach(function (kind) {
+    clipBytes[kind] = fetch('sounds/' + kind + '.mp3').then(function (response) {
+      return response.ok ? response.arrayBuffer() : null;
+    }).catch(function () { return null; });
+  });
+
+  function prepareCall(buffer, limit) {
+    var samples = buffer.getChannelData(0);
+    var windowSize = Math.round(buffer.sampleRate * 0.05);
+    var peak = 0, loudest = 0, levels = [];
+    for (var i = 0; i < samples.length; i += windowSize) {
+      var sum = 0;
+      for (var j = i; j < Math.min(i + windowSize, samples.length); j++) sum += samples[j] * samples[j];
+      var rms = Math.sqrt(sum / windowSize);
+      levels.push(rms);
+      if (rms > peak) { peak = rms; loudest = levels.length - 1; }
+    }
+    while (loudest > 0 && levels[loudest - 1] > peak * 0.18) loudest--;
+    var offset = buffer.duration <= limit ? 0 : Math.max(0, loudest * 0.05 - 0.09);
+    return { buffer: buffer, offset: offset, duration: Math.min(limit, buffer.duration - offset),
+      gain: Math.min(2.1, 0.16 / Math.max(0.04, peak)) };
+  }
+
+  function loadCalls() {
+    Object.keys(clips).forEach(function (kind) {
+      pendingRecordings[kind] = clipBytes[kind].then(function (bytes) {
+        if (!bytes) return;
+        return ctx.decodeAudioData(bytes).then(function (buffer) {
+          recordings[kind] = prepareCall(buffer, clips[kind]);
+        });
+      }).catch(function () {});
+    });
+  }
+
+  function playCall(call, bus) {
+    var source = ctx.createBufferSource();
+    var envelope = ctx.createGain();
+    var now = ctx.currentTime;
+    var rate = 0.96 + Math.random() * 0.08;
+    var end = now + call.duration / rate;
+    source.buffer = call.buffer;
+    source.playbackRate.value = rate;
+    envelope.gain.setValueAtTime(0, now);
+    envelope.gain.linearRampToValueAtTime(call.gain, now + 0.018);
+    envelope.gain.setValueAtTime(call.gain, Math.max(now + 0.018, end - 0.1));
+    envelope.gain.linearRampToValueAtTime(0, end);
+    source.connect(envelope);
+    envelope.connect(bus);
+    source.onended = function () { source.disconnect(); envelope.disconnect(); };
+    source.start(now, call.offset, call.duration);
+  }
   var birdAt = 6;
   var chimeAt = 18;
   var lapAt = 12;
@@ -339,6 +395,7 @@
       ready = true;
       if (ctx.state === 'suspended') ctx.resume();
       buildAmbient();
+      loadCalls();
       var btn = document.getElementById('snd');
       if (btn) btn.classList.add('on');
     },
@@ -359,8 +416,9 @@
       if (!ready || muted) return false;
       var fn = VOICE[kind] || VOICE.sheep;
       var t = ctx.currentTime;
-      if (!force && t - lastVoice < 0.5) return false;
+      if ((!force && t - lastVoice < 0.5) || t - (lastCall[kind] ?? -10) < (force ? 0.48 : 2.4)) return false;
       lastVoice = t;
+      lastCall[kind] = t;
       var dx = Number.isFinite(x) ? x - listenerX : 0;
       var dz = Number.isFinite(z) ? z - listenerZ : 0;
       var gain = ctx.createGain();
@@ -371,9 +429,19 @@
         gain.connect(pan);
         pan.connect(voiceBus);
       } else gain.connect(voiceBus);
-      callBus = gain;
-      try { fn(); } finally { callBus = null; }
-      setTimeout(function () { gain.disconnect(); }, 3500);
+      function start() {
+        if (!muted && ctx.state === 'running') {
+          if (recordings[kind]) playCall(recordings[kind], gain);
+          else {
+            callBus = gain;
+            try { fn(); } finally { callBus = null; }
+          }
+        }
+        setTimeout(function () { gain.disconnect(); if (pan) pan.disconnect(); }, 3500);
+      }
+      if (force && pendingRecordings[kind] && !recordings[kind]) {
+        Promise.race([pendingRecordings[kind], new Promise(function (resolve) { setTimeout(resolve, 350); })]).then(start);
+      } else start();
       return true;
     },
 
@@ -448,6 +516,8 @@
 
   /* any gesture unlocks (and re-unlocks after a tab switch) the context */
   ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(function (ev) {
-    window.addEventListener(ev, function () { P.audio.init(); }, { passive: true });
+    window.addEventListener(ev, function (event) {
+      if (!event.target.closest || !event.target.closest('#snd')) P.audio.init();
+    }, { passive: true });
   });
 })();
