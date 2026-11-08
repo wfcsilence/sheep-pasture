@@ -8,8 +8,7 @@
 
 ## 打开
 
-直接双击 `index.html` 就能玩（纯静态，不需要构建、不需要联网，Three.js 在 `vendor/` 里）。
-想用本地服务器：
+直接双击 `index.html` 就能玩（纯静态，不需要构建、不需要联网，Three.js 在 `vendor/` 里）。想用本地服务器时，先安装 Node.js，然后在项目目录运行：
 
 ```bash
 node serve.js        # http://127.0.0.1:8123
