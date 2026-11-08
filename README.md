@@ -73,6 +73,8 @@ js/entities.js      羊 / 牛 / 马 / 猪 / 天鹅 / 鸭 / 鱼 / 荷叶 / 芦苇
 js/app.js           场景、灯光、相机适配、动物状态机、池塘生态、草丛、碰撞、指针交互、缩放
 vendor/three.min.js Three.js r128（UMD）
 serve.js            可选的静态服务器
+sounds/             动物叫声与环境录音（Freesound，见「声音」）
+sounds/offline-audio.js  同一批素材的内嵌副本，双击打开时用
 ```
 
 ## 调参入口
@@ -101,20 +103,36 @@ serve.js            可选的静态服务器
 
 ## 声音
 
-全部用 Web Audio 现场合成，没有任何音频文件：
+场景不是静音的。环境声是一段草原夏日录音 + 一段草间风声，循环播放、首尾做淡化；动物叫的是**真实录音**，点击或自己溜达时随机发出，按它在画面里的左右位置做声像、按远近衰减音量。
 
-- 环境底噪走「风声 + 和声铺底 + 稀疏点缀」三层：极低频的棕噪声（240 Hz 低通）做远处风声，0.032 Hz 缓慢起伏；下面垫一层 A 大调的正弦和声（110 / 164.8 / 220 / 277.2 / 329.6 Hz，760 Hz 低通，各自 0.017–0.006 Hz 的轻微失谐漂移），听感是温暖的低频而不是噪声；再每隔 7–16 秒来一句圆润的鸟鸣（正弦滑音，不是尖啸），26–52 秒一声远处的风铃（两个五度关系的小钟声），14–30 秒一次很轻的水波。
-- 动物叫声都用「锯齿波 + 两个共振峰 + 气声」合成，不再是一根裸振荡器：羊（780/1480 Hz 共振峰的咩，19 Hz 颤音）、牛（392/760 Hz 的胸腔长哞，起音带气声）、马（快速下滑的嘶鸣 + 17 Hz 颤音）、猪/野猪（三段低频哼声叠噪声噗）、天鹅（三角波柔和低鸣）、鸭（1150/2350 Hz 的两声鼻腔嘎嘎）、鱼（上滑气泡 + 一声轻噗）。
-- 声音走两级母线：环境 → master，动物叫声 → voiceBus → master；master 上挂了 analyser，方便在听不到的情况下用 RMS 电平和谱质心做回归检查。
-- 点击动物 / 水鸟 / 鱼会立刻发声（不受冷却限制）；不点击时每只动物每 10–34 秒有小概率自己叫一声，水鸟同理。
-- 右上角「声音」按钮：第一次点击开启，之后点击在「声音 / 静音」之间切换；页面任意点击、滚轮、按键都会初始化音频（浏览器自动播放策略要求）。
+| 用途 | 素材 | 作者 | 许可 |
+| --- | --- | --- | --- |
+| 羊 | Sheep_Bleat.wav | n_audioman | CC BY 4.0 |
+| 马 | Horse Neigh 2.wav | GoodListener | CC BY 4.0 |
+| 鸭 | single quack from a duck | Mikes-MultiMedia | CC0 1.0 |
+| 牛 | cows_mooing_mono_4824.wav | Mystikuum | CC0 1.0 |
+| 猪 | Pig Oink | qubodup | CC0 1.0 |
+| 天鹅 | hissing swan animal field recording | Garuda1982 | CC BY 4.0 |
+| 野猪 | Wild Boar / Grunting / Squealing | TheVeoMammoth11 | CC BY 3.0 |
+| 环境 | PrairieSummer_ambience.wav | dsebeste | CC0 1.0 |
+| 环境 | In the grass.m4a | JeanetteDominguez | CC0 1.0 |
+
+全部素材来自 [Freesound](https://freesound.org)，逐条链接在 `sounds/credits.html`，页面上也有「音效来源」入口。播放时会截取片段、调整音高与时长、加淡入淡出；鱼的水泡和拨水声、风声、鸟鸣、水波仍是 Web Audio 现场合成。
+
+首次点击、按键或滚动会启动音频（浏览器的自动播放限制），右上角「声音」按钮切换静音。双击 `index.html` 时不额外发请求——音频从 `sounds/offline-audio.js` 里的内嵌副本读。
 
 ## 在水里画圈
 
 在池塘水面画一个闭合的圈，会随机召唤一只水鸟或鱼（天鹅 12% / 鸭 34% / 鱼 54%），落点会自动避开已有的水鸟与鱼，并保证在池塘内部；水里不会出现陆地动物的落地判定。水鸟和鱼每帧还有一层软分离，彼此不会穿模。
 
-## 许可
+## 许可与致谢
 
-- 场景、模型、贴图、音色全部是本仓库里手写/程序化生成的，没有外部素材。
+- 场景、模型、贴图、交互代码都是本仓库里手写 / 程序化生成的。
 - 唯一的第三方库是 `vendor/three.min.js`（Three.js r128，MIT License）。
+- 音效来自 Freesound，逐条作者与许可见上面的表格；CC BY 的素材保留署名，`sounds/credits.html` 与页面上的「音效来源」同样列出。
 - 其余代码随便取用、修改。如果拿去做别的东西，跟我说一声我会很高兴。
+
+## 贡献者
+
+- [wfcsilence](https://github.com/wfcsilence) —— 设计、模型、贴图、交互、音效选材
+- DeepSeek Harness —— 场景与动画实现、声音混音、文档与发布

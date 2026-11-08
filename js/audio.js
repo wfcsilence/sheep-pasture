@@ -3,7 +3,7 @@
    Local field recordings provide the animal calls; Web Audio
    synthesises ambience, footsteps and water effects.
 
-   Two buses: the ambience bed (wind, pad, birds, chimes) and the
+   Two buses: the ambience bed (wind, meadow wildlife and water) and the
    creature voices, so one never fights the other for level.
    ============================================================ */
 (function () {
@@ -26,12 +26,73 @@
   var recordings = Object.create(null);
   var pendingRecordings = Object.create(null);
   var clips = { sheep: 1.4, cow: 2.5, horse: 1.2, pig: 0.8, boar: 1.7, duck: 0.9, swan: 1.8 };
-  var clipBytes = {};
-  Object.keys(clips).forEach(function (kind) {
-    clipBytes[kind] = fetch('sounds/' + kind + '.mp3').then(function (response) {
+  // Local file pages cannot fetch adjacent MP3s. A classic script can
+  // load the same bytes on that route, keeping both modes in the same mixer.
+  var offlineAudio = location.protocol === 'file:' ? new Promise(function (resolve) {
+    var script = document.createElement('script');
+    script.src = 'sounds/offline-audio.js';
+    script.onload = function () { resolve(window.PASTURE_OFFLINE_AUDIO || {}); };
+    script.onerror = function () { resolve({}); };
+    document.head.appendChild(script);
+  }) : null;
+
+  function loadBytes(name) {
+    if (offlineAudio) return offlineAudio.then(function (files) {
+      if (!files[name]) return null;
+      var raw = atob(files[name]);
+      var bytes = new Uint8Array(raw.length);
+      for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      return bytes.buffer;
+    });
+    return fetch('sounds/' + name + '.mp3').then(function (response) {
       return response.ok ? response.arrayBuffer() : null;
     }).catch(function () { return null; });
-  });
+  }
+
+  var clipBytes = {};
+  Object.keys(clips).forEach(function (kind) { clipBytes[kind] = loadBytes(kind); });
+  var meadow = loadBytes('prairie');
+  var grassWind = loadBytes('grass-wind');
+  var meadowPlaying = false;
+
+  function startNatureLoop(bytes, targetLevel, highpass, onStart) {
+    bytes.then(function (encoded) {
+      if (!encoded) return;
+      return ctx.decodeAudioData(encoded).then(function (audio) {
+        var overlap = Math.min(Math.floor(audio.sampleRate * 1.8), Math.floor(audio.length / 5));
+        var length = audio.length - overlap;
+        if (!overlap || !length) return;
+        var loop = ctx.createBuffer(audio.numberOfChannels, length, audio.sampleRate);
+        var energy = 0;
+        for (var ch = 0; ch < audio.numberOfChannels; ch++) {
+          var source = audio.getChannelData(ch);
+          var target = loop.getChannelData(ch);
+          target.set(source.subarray(0, length));
+          for (var i = 0; i < overlap; i++) {
+            var fade = i / overlap;
+            target[i] = source[length + i] * (1 - fade) + source[i] * fade;
+          }
+          for (var n = 0; n < length; n += 16) energy += target[n] * target[n];
+        }
+        var rms = Math.sqrt(energy / (length / 16 * audio.numberOfChannels));
+        var player = ctx.createBufferSource();
+        var filter = ctx.createBiquadFilter();
+        var gain = ctx.createGain();
+        player.buffer = loop;
+        player.loop = true;
+        filter.type = 'highpass';
+        filter.frequency.value = highpass;
+        filter.Q.value = 0.7;
+        gain.gain.setValueAtTime(0, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(Math.min(2.4, targetLevel / Math.max(rms, 0.005)), ctx.currentTime + 3.4);
+        player.connect(filter);
+        filter.connect(gain);
+        gain.connect(ambBus);
+        player.start();
+        if (onStart) onStart();
+      });
+    }).catch(function () {});
+  }
 
   function prepareCall(buffer, limit) {
     var samples = buffer.getChannelData(0);
@@ -79,7 +140,6 @@
     source.start(now, call.offset, call.duration);
   }
   var birdAt = 6;
-  var chimeAt = 18;
   var lapAt = 12;
 
   /* ------------------------------------------------------------
@@ -202,7 +262,7 @@
   }
 
   /* ------------------------------------------------------------
-     ambience: a warm pad + soft wind, distant birds, wind chimes
+     ambience: prairie field recordings, wind through grass and water
      ------------------------------------------------------------ */
   function buildAmbient() {
     ambBus = ctx.createGain();
@@ -230,36 +290,8 @@
     wlfo.connect(wdep); wdep.connect(wg.gain);
     wlfo.start();
 
-    /* a slow, low pad — an A-major drone so quiet it reads as warmth */
-    var padNotes = [110.0, 164.81, 220.0, 277.18, 329.63];
-    var padGains = [0.007, 0.005, 0.004, 0.003, 0.002];
-    var padLp = ctx.createBiquadFilter();
-    padLp.type = 'lowpass';
-    padLp.frequency.value = 760;
-    padLp.Q.value = 0.6;
-    padLp.connect(ambBus);
-    for (var i = 0; i < padNotes.length; i++) {
-      var po = ctx.createOscillator();
-      var pg = ctx.createGain();
-      po.type = 'sine';
-      po.frequency.value = padNotes[i];
-      pg.gain.value = padGains[i];
-      /* a slow detune drift keeps it from sounding like a test tone */
-      var dr = ctx.createOscillator();
-      var dg = ctx.createGain();
-      dr.frequency.value = 0.017 + i * 0.006;
-      dg.gain.value = 0.9;
-      dr.connect(dg); dg.connect(po.frequency);
-      dr.start();
-      po.connect(pg); pg.connect(padLp);
-      po.start();
-    }
-    var padLfo = ctx.createOscillator();
-    var padDepth = ctx.createGain();
-    padLfo.frequency.value = 0.021;
-    padDepth.gain.value = 0.006;
-    padLfo.connect(padDepth); padDepth.connect(padLp.gain);
-    padLfo.start();
+    startNatureLoop(meadow, 0.073, 135, function () { meadowPlaying = true; });
+    startNatureLoop(grassWind, 0.036, 175);
   }
 
   /* a soft, round bird phrase — sine glides, no sharp chirp */
@@ -274,19 +306,6 @@
         form: [[base, 1.6, 1]], bus: ambBus, delay: i * 0.13
       });
     }
-  }
-
-  /* distant wind chime — two soft bell tones a fifth apart */
-  function chime() {
-    if (!ready || muted) return;
-    var root = [523.25, 587.33, 659.25, 783.99][(Math.random() * 4) | 0];
-    [1, 1.5].forEach(function (m, k) {
-      voiceNote({
-        type: 'sine', f0: root * m, f1: root * m * 0.999,
-        dur: 1.8, gain: k ? 0.020 : 0.028, attack: 0.008, release: 2.6,
-        form: [[root * m, 8, 1]], bus: ambBus, delay: k * 0.55
-      });
-    });
   }
 
   function lap() {
@@ -403,10 +422,10 @@
     /* once per frame; schedules the sparse ambience one-shots */
     tick: function (dt) {
       if (!ready || muted) return;
-      birdAt -= dt;
-      if (birdAt <= 0) { bird(); birdAt = 7 + Math.random() * 9; }
-      chimeAt -= dt;
-      if (chimeAt <= 0) { chime(); chimeAt = 26 + Math.random() * 26; }
+      if (!meadowPlaying) {
+        birdAt -= dt;
+        if (birdAt <= 0) { bird(); birdAt = 7 + Math.random() * 9; }
+      }
       lapAt -= dt;
       if (lapAt <= 0) { lap(); lapAt = 14 + Math.random() * 16; }
     },
